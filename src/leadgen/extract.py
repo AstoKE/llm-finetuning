@@ -173,6 +173,12 @@ def _phone_cores(text: str) -> set[str]:
     return cores
 
 
+def instagram_handle(value: str | None) -> str | None:
+    """'https://www.instagram.com/yildiz/?igsh=x' and '@Yildiz' both give 'yildiz'."""
+    path = (value or "").split("?")[0].split("#")[0].rstrip("/")
+    return path.rsplit("/", 1)[-1].lstrip("@").lower() or None
+
+
 def ground(facts: dict, page_text: str) -> tuple[dict, list[dict]]:
     """Drop contact values that do not literally appear in the page; return (clean facts, dropped)."""
     lower = page_text.lower()
@@ -194,7 +200,7 @@ def ground(facts: dict, page_text: str) -> tuple[dict, list[dict]]:
     wa_ok = bool(wa) and (re.sub(r"\D", "", wa)[-10:] in cores or wa.lower() in lower)
     clean["whatsapp"] = wa if check("whatsapp", wa, wa_ok) else None
     ig = facts["instagram"]
-    handle = ig.rstrip("/").rsplit("/", 1)[-1].lstrip("@").lower() if ig else ""
+    handle = instagram_handle(ig) or ""
     clean["instagram"] = ig if check("instagram", ig, bool(handle) and handle in lower) else None
     bu = facts["booking_url"]
     clean["booking_url"] = bu if check("booking_url", bu, bool(bu) and bu.lower().rstrip("/") in lower) else None

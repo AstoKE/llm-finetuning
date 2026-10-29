@@ -242,3 +242,9 @@ def test_run_extraction_drops_placeholder_sports_and_adds_flags(monkeypatch):
 
     assert rec["facts"]["sports"] == []
     assert "dayanak sayfada bulunamadı" in rec["flags"] and any("hangi spor" in f for f in rec["flags"])
+
+
+def test_instagram_link_with_query_string_is_grounded_by_its_handle():
+    page = "Bizi takip edin: https://www.instagram.com/yildiz/"
+    clean, dropped = ground(dict(FACTS, phones=[], instagram="https://www.instagram.com/yildiz/?igsh=abc%3D"), page)
+    assert clean["instagram"] == "https://www.instagram.com/yildiz/?igsh=abc%3D" and not dropped

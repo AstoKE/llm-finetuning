@@ -157,6 +157,12 @@ tr.sel td { background: var(--hover); }
 tr.pickrow { cursor: pointer; }
 .fields { display: grid; grid-template-columns: 170px 1fr; gap: 4px 12px; margin: 0 0 12px; }
 .fields dt { color: var(--ink-2); }
+.fields input[type=text], .fields select {
+  width: 100%; background: var(--card); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 10px; font: inherit; min-height: 34px;
+}
+.lbl-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 4px 0 16px; }
+button.primary { background: var(--series); color: #fff; border-color: var(--series); }
 .fields dd { margin: 0; overflow-wrap: anywhere; }
 pre.raw { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; max-height: 320px; margin: 0; font-size: 12px; }
 .warn { color: #b26a00; }
@@ -240,8 +246,10 @@ pre.raw { background: var(--surface); border: 1px solid var(--line); border-radi
     </section>
     <section class="card gap">
       <h2>Çıktılar (en yeni üstte; satıra tıkla)</h2>
+      <div class="row"><label><input type="checkbox" id="llm-unlabeled"> Yalnızca etiketsiz</label></div>
+      <div id="llm-acc" class="muted" style="margin:8px 0"></div>
       <div class="tablewrap"><table>
-        <thead><tr><th>Zaman</th><th>Yer / adres</th><th>Tür</th><th>Spor yeri</th><th>Telefon</th><th>Rezervasyon</th><th>İnceleme</th><th>Süre</th><th>Durum</th></tr></thead>
+        <thead><tr><th>Zaman</th><th>Yer / adres</th><th>Tür</th><th>Spor yeri</th><th>Telefon</th><th>Rezervasyon</th><th>İnceleme</th><th>Etiket</th><th>Süre</th><th>Durum</th></tr></thead>
         <tbody id="llm-rows"></tbody>
       </table></div>
       <p class="muted" id="llm-empty"></p>
@@ -487,7 +495,7 @@ async function poll() {
 if (LIVE) { setInterval(poll, 2000); poll(); }
 
 // ---- LLM page ----
-const llm = { status: null, results: [], selected: '', sig: '', model: '' };
+const llm = { status: null, results: [], labels: {}, accuracy: null, selected: '', sig: '', model: '', detailKey: '' };
 const BOOKING = { yes: 'var', no: 'yok', unknown: 'belirsiz' };
 const KIND = { halisaha: 'halı saha', spor_kompleksi: 'spor kompleksi', spor_salonu: 'spor salonu', stadyum: 'stadyum', okul_veya_kurum: 'okul/kurum', diger: 'diğer' };
 const PAGE_KIND = { venue_site: 'tesisin kendi sitesi', social_profile: 'tesisin sosyal profili', directory_or_news: 'haber/rehber/dizin', other: 'diğer' };
@@ -519,6 +527,57 @@ function factRows(r) {
     ['Dayanak (sayfadan alıntı)', f.evidence || '-'],
   ];
 }
+const FIELD_LABEL = { page_kind: 'sayfa türü', is_sports_venue: 'spor yeri', venue_type: 'tür', sports: 'sporlar', phones: 'telefon', emails: 'e-posta', whatsapp: 'whatsapp', instagram: 'instagram', online_booking: 'rezervasyon' };
+const OPTS = {
+  page_kind: Object.entries(PAGE_KIND), venue_type: Object.entries(KIND), online_booking: Object.entries(BOOKING),
+  is_sports_venue: [['true', 'evet'], ['false', 'hayır']],
+};
+async function saveLabel(key, status, gold, note) {
+  const r = await fetch('/api/llm/label', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Leadgen': '1' }, body: JSON.stringify({ key, status, gold, note }) });
+  if (!r.ok) { alert((await r.json().catch(() => ({}))).error || 'Kaydedilemedi'); return; }
+  await pollLlm(true);
+  const next = llm.results.find((x) => x.facts && !llm.labels[recKey(x)] && recKey(x) !== key);
+  if (next) llm.selected = recKey(next);  // keep the flow going: jump to the next unlabeled record
+  llm.detailKey = '';
+  renderLlm();
+}
+function labelForm(r) {
+  const key = recKey(r), cur = llm.labels[key], src = (cur && cur.gold) || r.facts;
+  const sel = (name, value) => {
+    const s = el('select', { name });
+    OPTS[name].forEach(([v, t]) => s.append(el('option', { value: v, textContent: t })));
+    s.value = String(value);
+    return s;
+  };
+  const txt = (value) => el('input', { type: 'text', value: Array.isArray(value) ? value.join(', ') : (value || '') });
+  const list = (v) => v.split(',').map((x) => x.trim()).filter(Boolean);
+  const i = {
+    page_kind: sel('page_kind', src.page_kind), is_sports_venue: sel('is_sports_venue', src.is_sports_venue), venue_type: sel('venue_type', src.venue_type),
+    sports: txt(src.sports), phones: txt(src.phones), emails: txt(src.emails), whatsapp: txt(src.whatsapp), instagram: txt(src.instagram),
+    online_booking: sel('online_booking', src.online_booking),
+  };
+  const note = txt(cur ? cur.note : '');
+  const collect = () => ({
+    page_kind: i.page_kind.value, is_sports_venue: i.is_sports_venue.value === 'true', venue_type: i.venue_type.value,
+    sports: list(i.sports.value), phones: list(i.phones.value), emails: list(i.emails.value),
+    whatsapp: i.whatsapp.value.trim() || null, instagram: i.instagram.value.trim() || null, online_booking: i.online_booking.value,
+  });
+  const google = D.find((p) => p.id === r.place_id);
+  const status = cur ? (cur.status === 'unsure' ? 'Etiket: emin değilim' : 'Etiket: ' + (cur.corrected.length ? 'düzeltildi (' + cur.corrected.map((f) => FIELD_LABEL[f]).join(', ') + ')' : 'onaylandı')) : 'Etiketsiz';
+  const hints = [];
+  if (google && google.phone) hints.push("Google'daki telefon: " + google.phone);
+  if ((r.flags || []).some((f) => f.startsWith('çelişki'))) hints.push('Çelişkili kayıt: sayfa spam ya da ele geçirilmiş olabilir, açarken dikkat et.');
+  return el('div', {},
+    el('h2', { textContent: 'Etiketle: değerleri sayfaya bakarak düzelt (virgülle ayır)' }),
+    el('p', { className: 'muted', textContent: [status, ...hints].join(' · ') }),
+    el('dl', { className: 'fields' }, ...Object.entries(i).flatMap(([k, input]) => [el('dt', { textContent: FIELD_LABEL[k] }), el('dd', {}, input)]),
+      el('dt', { textContent: 'not' }), el('dd', {}, note)),
+    el('div', { className: 'lbl-actions' },
+      el('button', { className: 'primary', textContent: 'Kaydet', onclick: () => saveLabel(key, 'labeled', collect(), note.value) }),
+      el('button', { textContent: 'Emin değilim', onclick: () => saveLabel(key, 'unsure', null, note.value) }),
+      el('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer', textContent: 'Sayfayı aç' })));
+}
+
 function detail(r) {
   const box = $('#llm-detail');
   if (!r) { box.replaceChildren(el('p', { className: 'muted', textContent: 'Henüz çıktı yok.' })); return; }
@@ -531,6 +590,7 @@ function detail(r) {
     if (r.dropped.length) {
       parts.push(el('p', { className: 'warn', textContent: 'Atılan değerler: ' + r.dropped.map((d) => d.field + ' = ' + d.value + ' (' + (d.reason || 'sayfada yok') + ')').join('; ') }));
     }
+    parts.push(labelForm(r));
     parts.push(el('pre', { className: 'raw', textContent: JSON.stringify(r.facts, null, 2) }));
   }
   box.replaceChildren(...parts);
@@ -559,7 +619,9 @@ function renderLlm() {
 
   if (!llm.selected && llm.results.length) llm.selected = recKey(llm.results[0]);
   $('#llm-empty').textContent = llm.results.length ? '' : 'Henüz çıktı yok. Yukarıdan bir sayfa dene.';
-  $('#llm-rows').replaceChildren(...llm.results.map((r) => {
+  const onlyNew = $('#llm-unlabeled').checked;
+  const shown = llm.results.filter((r) => !onlyNew || (r.facts && !llm.labels[recKey(r)]));
+  $('#llm-rows').replaceChildren(...shown.map((r) => {
     const f = r.facts;
     const tr = el('tr', { className: 'pickrow' + (recKey(r) === llm.selected ? ' sel' : ''), tabIndex: 0 },
       el('td', { textContent: new Date(r.ts).toLocaleString('tr', { dateStyle: 'short', timeStyle: 'short' }) }),
@@ -569,26 +631,35 @@ function renderLlm() {
       el('td', { textContent: f ? f.phones.join(', ') : '' }),
       el('td', { textContent: f ? (BOOKING[f.online_booking] || '') : '' }),
       el('td', { className: (r.flags || []).length ? 'warn' : '', textContent: f ? ((r.flags || []).length ? (r.flags.length + ' uyarı') : '-') : '' }),
+      el('td', { textContent: (() => { const l = llm.labels[recKey(r)]; return l ? (l.status === 'unsure' ? '?' : (l.corrected.length ? 'düzeltildi' : 'onaylı')) : (f ? '-' : ''); })() }),
       el('td', { className: 'num', textContent: r.seconds + ' sn' }),
       el('td', { className: r.ok ? '' : 'err', textContent: r.ok ? 'tamam' + (r.dropped.length ? ' · ' + r.dropped.length + ' atıldı' : '') : r.error }));
-    const pick = () => { llm.selected = recKey(r); llm.sig = ''; renderLlm(); };
+    const pick = () => { llm.selected = recKey(r); llm.sig = ''; llm.detailKey = ''; renderLlm(); };
     tr.onclick = pick;
     tr.onkeydown = (e) => { if (e.key === 'Enter') pick(); };
     return tr;
   }));
-  detail(llm.results.find((r) => recKey(r) === llm.selected));
+  // The form is rebuilt only when the selection or its label changes, so polling never wipes what is being typed.
+  const lbl = llm.labels[llm.selected];
+  const detailKey = llm.selected + '|' + (lbl ? lbl.ts : '');
+  if (detailKey !== llm.detailKey) { llm.detailKey = detailKey; detail(llm.results.find((r) => recKey(r) === llm.selected)); }
+  const a = llm.accuracy;
+  $('#llm-acc').textContent = a && (a.labeled || a.unsure)
+    ? a.labeled + ' etiketli, ' + a.unsure + ' emin değil. Model = etiket: ' + Object.entries(a.fields).map(([f, [ok, n]]) => FIELD_LABEL[f] + ' ' + ok + '/' + n).join(' · ') + (a.labeled < 30 ? ' (örnek az, oran yorumlanmaz)' : '')
+    : 'Henüz etiket yok.';
 }
 
 async function pollLlm(force) {
   if ($('#view-llm').hidden) return;
   try {
-    const [status, results] = await Promise.all([fetch('/api/llm/status').then((r) => r.json()), fetch('/api/llm/results').then((r) => r.json())]);
-    const sig = JSON.stringify([status, results.length, results[0] && results[0].ts]);
-    llm.status = status; llm.results = results;
+    const [status, results, labels] = await Promise.all(['status', 'results', 'labels'].map((n) => fetch('/api/llm/' + n).then((r) => r.json())));
+    const sig = JSON.stringify([status, results.length, results[0] && results[0].ts, labels]);
+    llm.status = status; llm.results = results; llm.labels = labels.labels; llm.accuracy = labels.accuracy;
     if (force || sig !== llm.sig) { llm.sig = sig; renderLlm(); }
   } catch (e) { $('#llm-state').textContent = 'Sunucuya ulaşılamıyor'; }
 }
 $('#llm-model').onchange = (e) => { llm.model = e.target.value; };
+$('#llm-unlabeled').onchange = () => { llm.sig = ''; renderLlm(); };
 $('#llm-run-url').onclick = () => {
   const url = $('#llm-url').value.trim();
   if (url) postJson('/api/llm/run', { mode: 'url', url, model: llm.model || undefined });

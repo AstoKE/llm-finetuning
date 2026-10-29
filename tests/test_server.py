@@ -117,3 +117,24 @@ def test_llm_url_run_end_to_end_with_fake_extractor(server):
         time.sleep(0.01)
     assert results[0]["url"] == "https://yildiz.example/" and results[0]["model"] == "qwen3.5:9b"
     assert 'id="view-llm"' in httpx.get(url).text
+
+
+def test_label_endpoint_saves_gold_and_reports_accuracy(server):
+    url, raw = server
+    facts = {"page_kind": "venue_site", "is_sports_venue": True, "venue_type": "halisaha", "sports": ["futbol"],
+             "phones": ["0532 111 22 33"], "emails": [], "whatsapp": None, "instagram": None, "online_booking": "yes"}
+    record = {"ts": "t1", "url": "https://x.example/", "place_id": "a", "name": "X", "model": "m", "ok": True,
+              "error": None, "chars": 1, "seconds": 1, "facts": facts, "dropped": [], "flags": []}
+    llm_dir = raw.parent / "llm"
+    llm_dir.mkdir(exist_ok=True)
+    (llm_dir / "out.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+    post = lambda body, **kw: httpx.post(f"{url}/api/llm/label", json=body, headers={"X-Leadgen": "1"}, **kw)  # noqa: E731
+
+    assert httpx.post(f"{url}/api/llm/label", json={}).status_code == 403
+    assert post({"key": "nope", "status": "unsure"}).status_code == 404
+    assert post({"key": "t1|https://x.example/", "status": "labeled", "gold": dict(facts, venue_type="uydurma")}).status_code == 400
+
+    assert post({"key": "t1|https://x.example/", "status": "labeled", "gold": dict(facts, online_booking="no")}).status_code == 200
+    state = httpx.get(f"{url}/api/llm/labels").json()
+    assert state["labels"]["t1|https://x.example/"]["corrected"] == ["online_booking"]
+    assert state["accuracy"]["labeled"] == 1 and state["accuracy"]["fields"]["online_booking"] == [0, 1]

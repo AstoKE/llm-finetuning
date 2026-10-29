@@ -14,6 +14,7 @@ from pathlib import Path
 
 from leadgen.dashboard import REPORT_NAME, build, list_reports, load, save_report
 from leadgen.extract import DEFAULT_MODEL, OLLAMA_URL
+from leadgen.labels import LabelStore, accuracy, record_key
 from leadgen.llm_runner import LlmRunner, Rejected
 
 RECENT = 8
@@ -35,6 +36,7 @@ class App:
     def __init__(self, raw: Path, ollama_url: str = OLLAMA_URL, llm: LlmRunner | None = None):
         self.raw = raw
         self.llm = llm or LlmRunner(raw.parent / "llm" / "extractions.jsonl", ollama_url)
+        self.labels = LabelStore(raw.parent / "llm" / "labels.jsonl")
         self.ids = raw / "place_ids.jsonl"
         self.files = {
             "pro": (self.ids, raw / "details_pro.jsonl"),
@@ -46,6 +48,20 @@ class App:
 
     def places(self) -> list[dict]:
         return load(self.ids, *(out for _, out in self.files.values()))
+
+    def label_state(self) -> dict:
+        labels = self.labels.all()
+        return {"labels": labels, "accuracy": accuracy(self.llm.records(), labels)}
+
+    def save_label(self, body: dict) -> None:
+        records = {record_key(r): r for r in self.llm.records()}
+        record = records.get(body.get("key"))
+        if record is None:
+            raise Rejected("unknown record", 404)
+        try:
+            self.labels.save(record, body.get("status"), body.get("gold"), str(body.get("note") or ""))
+        except ValueError as exc:  # includes pydantic.ValidationError
+            raise Rejected(str(exc)[:300]) from exc
 
     def run_llm(self, body: dict) -> None:
         model = body.get("model") or DEFAULT_MODEL
@@ -171,6 +187,8 @@ def make_handler(app: App, port: int):
                 self._json(app.places())
             elif self.path == "/api/llm/status":
                 self._json(app.llm.status(app.places()))
+            elif self.path == "/api/llm/labels":
+                self._json(app.label_state())
             elif self.path == "/api/llm/results":
                 self._json(app.llm.records()[-100:][::-1])
             elif self.path == "/api/reports":
@@ -189,12 +207,14 @@ def make_handler(app: App, port: int):
                 return self._json({"error": "forbidden"}, 403)
             if self.path == "/api/save-report":
                 return self._json({"name": app.save_report().name})
-            if self.path not in ("/api/run", "/api/llm/run"):
+            if self.path not in ("/api/run", "/api/llm/run", "/api/llm/label"):
                 return self._json({"error": "not found"}, 404)
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
                 if self.path == "/api/run":
                     app.start(body.get("tier", ""), body.get("ids"))
+                elif self.path == "/api/llm/label":
+                    app.save_label(body)
                 else:
                     app.run_llm(body)
             except Rejected as exc:
