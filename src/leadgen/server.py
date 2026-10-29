@@ -13,16 +13,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from leadgen.dashboard import REPORT_NAME, build, list_reports, load, save_report
+from leadgen.extract import DEFAULT_MODEL, OLLAMA_URL
+from leadgen.llm_runner import LlmRunner, Rejected
 
 RECENT = 8
 ACTIVE_WINDOW = 15  # seconds since the output file last grew => a job (even one we did not start) is running
 SLACK = 50  # extra requests allowed over the number of places, for retries
-
-
-class Rejected(Exception):
-    def __init__(self, message: str, status: int = 400):
-        super().__init__(message)
-        self.status = status
 
 
 def _rows(path: Path) -> list[dict]:
@@ -36,8 +32,9 @@ def _id(row: dict) -> str:
 
 
 class App:
-    def __init__(self, raw: Path):
+    def __init__(self, raw: Path, ollama_url: str = OLLAMA_URL, llm: LlmRunner | None = None):
         self.raw = raw
+        self.llm = llm or LlmRunner(raw.parent / "llm" / "extractions.jsonl", ollama_url)
         self.ids = raw / "place_ids.jsonl"
         self.files = {
             "pro": (self.ids, raw / "details_pro.jsonl"),
@@ -46,6 +43,24 @@ class App:
         self.procs: dict[str, subprocess.Popen] = {}
         self.logs = raw.parent / "logs"
         self.reports = raw.parent / "reports"
+
+    def places(self) -> list[dict]:
+        return load(self.ids, *(out for _, out in self.files.values()))
+
+    def run_llm(self, body: dict) -> None:
+        model = body.get("model") or DEFAULT_MODEL
+        if body.get("mode") == "url":
+            url = body.get("url")
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                raise Rejected("url must start with http:// or https://")
+            self.llm.start_url(url, model)
+        elif body.get("mode") == "places":
+            ids = body.get("ids")
+            if ids is not None and not isinstance(ids, list):
+                raise Rejected("ids must be a list")
+            self.llm.start_places(self.places(), model, int(body.get("limit", 5)), ids)
+        else:
+            raise Rejected("unknown mode")
 
     def save_report(self) -> Path:
         return save_report(self.raw, self.reports)
@@ -153,7 +168,11 @@ def make_handler(app: App, port: int):
             elif self.path == "/api/progress":
                 self._json(app.progress())
             elif self.path == "/api/places":
-                self._json(load(app.ids, *(out for _, out in app.files.values())))
+                self._json(app.places())
+            elif self.path == "/api/llm/status":
+                self._json(app.llm.status(app.places()))
+            elif self.path == "/api/llm/results":
+                self._json(app.llm.records()[-100:][::-1])
             elif self.path == "/api/reports":
                 self._json(list_reports(app.reports))
             elif self.path.startswith("/reports/") and REPORT_NAME.match(self.path.removeprefix("/reports/")):
@@ -170,11 +189,14 @@ def make_handler(app: App, port: int):
                 return self._json({"error": "forbidden"}, 403)
             if self.path == "/api/save-report":
                 return self._json({"name": app.save_report().name})
-            if self.path != "/api/run":
+            if self.path not in ("/api/run", "/api/llm/run"):
                 return self._json({"error": "not found"}, 404)
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-                app.start(body.get("tier", ""), body.get("ids"))
+                if self.path == "/api/run":
+                    app.start(body.get("tier", ""), body.get("ids"))
+                else:
+                    app.run_llm(body)
             except Rejected as exc:
                 return self._json({"error": str(exc)}, exc.status)
             except (ValueError, AttributeError):

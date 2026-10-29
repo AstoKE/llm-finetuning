@@ -87,7 +87,7 @@ TEMPLATE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ankara Saha Leadleri</title>
+<title>Saha Leadleri</title>
 <style>__LEAFLET_CSS__</style>
 <style>
 :root {
@@ -123,6 +123,9 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
 h2 { font-size: 14px; margin: 0 0 12px; color: var(--ink-2); font-weight: 600; }
 .bar { display: grid; grid-template-columns: 150px 1fr 48px; gap: 8px; align-items: center; padding: 3px 0; }
+#groupby { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: inherit; min-height: 36px; }
+.bar.pick { cursor: pointer; border-radius: 6px; }
+.bar.pick:hover, .bar.pick:focus-visible { background: var(--hover); outline: none; }
 .bar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
 .bar .track { height: 10px; }
 .bar .fill { height: 10px; background: var(--series); border-radius: 0 4px 4px 0; }
@@ -139,6 +142,24 @@ td.num { font-variant-numeric: tabular-nums; }
 a { color: var(--series); }
 button { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; min-height: 36px; }
 .muted { color: var(--ink-3); }
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tabs button.on { background: var(--series); color: #fff; border-color: var(--series); }
+.gap { margin-bottom: 16px; }
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.row label { color: var(--ink-2); display: flex; gap: 6px; align-items: center; }
+.row input[type=url], .row input[type=number], .row select {
+  background: var(--card); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 10px; font: inherit; min-height: 36px;
+}
+.row input[type=url] { flex: 1; min-width: 260px; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+tr.sel td { background: var(--hover); }
+tr.pickrow { cursor: pointer; }
+.fields { display: grid; grid-template-columns: 170px 1fr; gap: 4px 12px; margin: 0 0 12px; }
+.fields dt { color: var(--ink-2); }
+.fields dd { margin: 0; overflow-wrap: anywhere; }
+pre.raw { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; max-height: 320px; margin: 0; font-size: 12px; }
+.warn { color: #b26a00; }
 .job { display: grid; grid-template-columns: 170px 1fr auto; gap: 12px; align-items: center; padding: 6px 0; }
 .job .track { height: 10px; background: var(--hover); border-radius: 4px; overflow: hidden; }
 .job .fill { height: 10px; background: var(--series); }
@@ -152,8 +173,13 @@ button { background: var(--card); color: var(--ink); border: 1px solid var(--lin
 </head>
 <body>
 <main>
-  <h1>Ankara saha ve tesis leadleri</h1>
+  <h1 id="title">Saha ve tesis leadleri</h1>
   <p class="sub" id="sub"></p>
+  <nav class="tabs" id="tabs" hidden>
+    <button data-view="data" class="on">Veri</button>
+    <button data-view="llm">LLM</button>
+  </nav>
+  <div id="view-data">
   <section class="card" id="jobs" hidden style="margin-bottom:16px">
     <h2>Veri çekme</h2>
     <div id="jobrows"></div>
@@ -174,7 +200,15 @@ button { background: var(--card); color: var(--ink); border: 1px solid var(--lin
   </div>
   <div class="kpis" id="kpis"></div>
   <div class="grid">
-    <section class="card"><h2 id="bars-title"></h2><div id="bars"></div></section>
+    <section class="card">
+      <h2 id="bars-title"></h2>
+      <select id="groupby" aria-label="Grupla">
+        <option value="type">Türe göre</option>
+        <option value="region">Bölgeye göre (şehir, ilçe)</option>
+        <option value="query">Keşif sorgusuna göre</option>
+      </select>
+      <div id="bars" style="margin-top:12px"></div>
+    </section>
     <section class="card"><h2>Harita (sürükle, yakınlaştır, noktaya tıkla)</h2><div id="map"></div></section>
   </div>
   <section class="card">
@@ -182,6 +216,38 @@ button { background: var(--card); color: var(--ink); border: 1px solid var(--lin
     <div class="tablewrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
     <p><button id="more">Daha fazla göster</button> <span class="muted" id="count"></span></p>
   </section>
+  </div>
+
+  <div id="view-llm" hidden>
+    <section class="card gap">
+      <h2>Yerel model</h2>
+      <div class="row"><span id="llm-state"></span><select id="llm-model" aria-label="Model"></select></div>
+      <p class="muted">Sayfa getirilir (robots.txt'e uyulur), metne çevrilir, model JSON şemasına göre alanları çıkarır. Sayfada geçmeyen telefon, e-posta ve bağlantılar otomatik atılır.</p>
+    </section>
+    <section class="card gap">
+      <h2>Tek sayfayı dene</h2>
+      <div class="row"><input type="url" id="llm-url" placeholder="https://ornek-halisaha.com" aria-label="Sayfa adresi"><button id="llm-run-url">Çıkar</button></div>
+    </section>
+    <section class="card gap">
+      <h2>Toplu çalıştır (web sitesi olan yerler)</h2>
+      <div class="row">
+        <label>Kaç yer <input type="number" id="llm-limit" value="5" min="1" max="200" style="width:80px"></label>
+        <label><input type="checkbox" id="llm-visible"> Yalnızca Veri sekmesinde görünenler</label>
+        <button id="llm-run-places">Başlat</button>
+      </div>
+      <p class="muted" id="llm-coverage"></p>
+      <div id="llm-job"></div>
+    </section>
+    <section class="card gap">
+      <h2>Çıktılar (en yeni üstte; satıra tıkla)</h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Zaman</th><th>Yer / adres</th><th>Tür</th><th>Spor yeri</th><th>Telefon</th><th>Rezervasyon</th><th>İnceleme</th><th>Süre</th><th>Durum</th></tr></thead>
+        <tbody id="llm-rows"></tbody>
+      </table></div>
+      <p class="muted" id="llm-empty"></p>
+    </section>
+    <section class="card"><h2>Seçili çıktı</h2><div id="llm-detail"></div></section>
+  </div>
 </main>
 <div id="tip" role="tooltip"></div>
 <script>__LEAFLET_JS__</script>
@@ -198,7 +264,7 @@ function enrich(list) {
   return list;
 }
 let D = enrich(JSON.parse(document.getElementById('data').textContent));
-const state = { q: '', il: '', ilce: '', type: '', status: '', phone: false, web: false, sort: 'name', dir: 1, limit: 100 };
+const state = { group: 'type', q: '', il: '', ilce: '', type: '', status: '', phone: false, web: false, sort: 'name', dir: 1, limit: 100 };
 const $ = (s) => document.querySelector(s);
 const el = (tag, props = {}, ...kids) => { const e = document.createElement(tag); Object.assign(e, props); e.append(...kids); return e; };
 const hasDetail = () => D.some((p) => p.detail);
@@ -230,22 +296,48 @@ function fillFilters() {
   fillSelect($('#status'), 'Tüm durumlar', count(D.map((p) => p.status || NO_TYPE)));
 }
 
+const distinct = (list, key) => new Set(list.map((p) => p[key]).filter(Boolean)).size;
 function kpis(list) {
   const stats = [
     ['Yer', list.length],
+    ['Şehir / ilçe', distinct(list, 'il') + ' / ' + distinct(list, 'ilce')],
     ['Detayı çekilen', list.filter((p) => p.detail).length],
     ['Telefonlu', list.filter((p) => p.phone).length],
     ['Web siteli', list.filter((p) => p.web).length],
     ['Faal', list.filter((p) => p.status === 'OPERATIONAL').length],
   ];
   $('#kpis').replaceChildren(...stats.map(([label, n]) =>
-    el('div', { className: 'card kpi' }, el('b', { textContent: n.toLocaleString('tr') }), el('span', { textContent: label }))));
+    el('div', { className: 'card kpi' }, el('b', { textContent: typeof n === 'number' ? n.toLocaleString('tr') : n }), el('span', { textContent: label }))));
+}
+
+function setRegion(il, ilce) {
+  state.il = il; state.ilce = ilce; state.limit = 100;
+  fillFilters();
+  $('#il').value = il; $('#ilce').value = ilce;
+  render();
 }
 
 function bars(list) {
-  const detailed = hasDetail();
-  $('#bars-title').textContent = detailed ? 'Türe göre yer sayısı' : 'Sorguya göre bulunan yer sayısı (detay henüz çekilmedi)';
-  const rows = (detailed ? count(list.map((p) => p.type || NO_TYPE)) : count(list.flatMap((p) => p.queries))).slice(0, 12);
+  // Without details there are no types or regions yet, so fall back to the discovery queries.
+  const group = hasDetail() ? state.group : 'query';
+  const byRegion = group === 'region';
+  let rows, title, onPick = null;
+  if (byRegion && !state.il) {
+    rows = count(list.map((p) => p.il || NO_TYPE)); title = 'Şehre göre yer sayısı (tıkla: şehre in)';
+    onPick = (name) => setRegion(name, '');
+  } else if (byRegion && !state.ilce) {
+    rows = count(list.map((p) => p.ilce || NO_TYPE)); title = state.il + ' ilçelerine göre yer sayısı (tıkla: ilçeye in)';
+    onPick = (name) => setRegion(state.il, name);
+  } else if (byRegion) {
+    rows = count(list.map((p) => p.type || NO_TYPE)); title = state.il + ' / ' + state.ilce + ': türe göre yer sayısı';
+  } else if (group === 'type') {
+    rows = count(list.map((p) => p.type || NO_TYPE)); title = 'Türe göre yer sayısı';
+  } else {
+    rows = count(list.flatMap((p) => p.queries)); title = 'Sorguya göre bulunan yer sayısı' + (hasDetail() ? '' : ' (detay henüz çekilmedi)');
+  }
+  $('#bars-title').textContent = title;
+  $('#groupby').value = state.group;
+  rows = rows.slice(0, 15);
   const max = rows.length ? rows[0][1] : 1;
   $('#bars').replaceChildren(...rows.map(([name, n]) => {
     const row = el('div', { className: 'bar' },
@@ -253,6 +345,11 @@ function bars(list) {
       el('div', { className: 'track' }, el('div', { className: 'fill', style: 'width:' + (n / max * 100) + '%' })),
       el('span', { className: 'n', textContent: n }));
     row.dataset.tip = name + ': ' + n;
+    if (onPick && name !== NO_TYPE) {
+      row.classList.add('pick'); row.tabIndex = 0; row.setAttribute('role', 'button');
+      row.onclick = () => onPick(name);
+      row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(name); } };
+    }
     return row;
   }));
 }
@@ -261,7 +358,7 @@ function bars(list) {
 let lmap = null, markers = null, lastMapSig = '', lastFitKey = '', fitted = false;
 function ensureMap() {
   if (lmap || typeof L === 'undefined') return;
-  lmap = L.map('map', { preferCanvas: true }).setView([39.92, 32.85], 10);
+  lmap = L.map('map', { preferCanvas: true }).setView([39, 35], 6);  // Turkey; fitBounds takes over as soon as there are points
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',
@@ -298,7 +395,7 @@ function drawMap(list) {
   }
 }
 
-const COLS = [['name', 'İsim'], ['type', 'Tür'], ['status', 'Durum'], ['phone', 'Telefon'], ['web', 'Web'], ['rating', 'Puan'], ['ratings', 'Yorum']];
+const COLS = [['name', 'İsim'], ['ilce', 'Bölge'], ['type', 'Tür'], ['status', 'Durum'], ['phone', 'Telefon'], ['web', 'Web'], ['rating', 'Puan'], ['ratings', 'Yorum']];
 function table(list) {
   $('#thead').replaceChildren(el('tr', {}, ...COLS.map(([k, label]) => {
     const th = el('th', { textContent: label + (state.sort === k ? (state.dir > 0 ? ' ▲' : ' ▼') : '') });
@@ -315,6 +412,7 @@ function table(list) {
   const link = (href, text) => href ? el('a', { href, textContent: text, target: '_blank', rel: 'noopener noreferrer' }) : '';
   $('#tbody').replaceChildren(...sorted.slice(0, state.limit).map((p) => el('tr', {},
     el('td', {}, p.url ? link(p.url, p.name || p.id) : (p.name || p.id), p.address ? el('div', { className: 'muted', textContent: p.address }) : ''),
+    el('td', { textContent: [p.ilce, p.il].filter(Boolean).join(', ') }),
     el('td', { textContent: p.type || '' }),
     el('td', { textContent: p.status || '' }),
     el('td', { textContent: p.phone || '' }),
@@ -328,6 +426,7 @@ function table(list) {
 function render() {
   $('#sub').textContent = LIVE ? 'Canlı: yerel sunucudan okunuyor, ilerleme otomatik yenilenir.'
     : hasDetail() ? 'Google Places verisi, yerel dosyadan üretildi.' : 'Yalnızca place ID listesi var; detaylar çekilince tablo dolar.';
+  $('#title').textContent = state.il ? state.il + (state.ilce ? ' / ' + state.ilce : '') + ' saha ve tesis leadleri' : 'Saha ve tesis leadleri';
   const list = filtered(); visibleIds = list.map((p) => p.id); kpis(list); bars(list); drawMap(list); table(list); renderJobs();
 }
 
@@ -387,9 +486,128 @@ async function poll() {
 }
 if (LIVE) { setInterval(poll, 2000); poll(); }
 
+// ---- LLM page ----
+const llm = { status: null, results: [], selected: '', sig: '', model: '' };
+const BOOKING = { yes: 'var', no: 'yok', unknown: 'belirsiz' };
+const KIND = { halisaha: 'halı saha', spor_kompleksi: 'spor kompleksi', spor_salonu: 'spor salonu', stadyum: 'stadyum', okul_veya_kurum: 'okul/kurum', diger: 'diğer' };
+const PAGE_KIND = { venue_site: 'tesisin kendi sitesi', social_profile: 'tesisin sosyal profili', directory_or_news: 'haber/rehber/dizin', other: 'diğer' };
+const recKey = (r) => r.ts + '|' + r.url;
+const host = (u) => { try { return new URL(u).hostname; } catch (e) { return u; } };
+
+function showView(view) {
+  $('#view-data').hidden = view !== 'data';
+  $('#view-llm').hidden = view !== 'llm';
+  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
+  history.replaceState(null, '', view === 'llm' ? '#llm' : location.pathname);
+  if (view === 'llm') pollLlm(true);
+  else if (lmap) { lmap.invalidateSize(); lastMapSig = ''; fitted = false; render(); }  // the map was sized while hidden
+}
+async function postJson(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Leadgen': '1' }, body: JSON.stringify(body) });
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || 'Başlatılamadı');
+  pollLlm(true);
+}
+
+function factRows(r) {
+  const f = r.facts;
+  const list = (a) => (a && a.length ? a.join(', ') : '-');
+  return [
+    ['Sayfa türü', PAGE_KIND[f.page_kind] || f.page_kind], ['Spor yeri mi', f.is_sports_venue ? 'evet' : 'hayır'], ['Tür', KIND[f.venue_type] || f.venue_type],
+    ['Sporlar', list(f.sports)], ['Telefon', list(f.phones)], ['E-posta', list(f.emails)],
+    ['WhatsApp', f.whatsapp || '-'], ['Instagram', f.instagram || '-'],
+    ['Online rezervasyon', BOOKING[f.online_booking] || f.online_booking], ['Rezervasyon bağlantısı', f.booking_url || '-'],
+    ['Dayanak (sayfadan alıntı)', f.evidence || '-'],
+  ];
+}
+function detail(r) {
+  const box = $('#llm-detail');
+  if (!r) { box.replaceChildren(el('p', { className: 'muted', textContent: 'Henüz çıktı yok.' })); return; }
+  const meta = [r.name, host(r.url), r.model, r.seconds + ' sn', r.chars + ' karakter', new Date(r.ts).toLocaleString('tr')].filter(Boolean).join(' · ');
+  const parts = [el('p', { className: 'muted', textContent: meta })];
+  if (r.error) parts.push(el('p', { className: 'err', textContent: 'Hata: ' + r.error }));
+  if ((r.flags || []).length) parts.push(el('p', { className: 'warn', textContent: 'İnceleme gerekli: ' + r.flags.join('; ') }));
+  if (r.facts) {
+    parts.push(el('dl', { className: 'fields' }, ...factRows(r).flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })])));
+    if (r.dropped.length) {
+      parts.push(el('p', { className: 'warn', textContent: 'Atılan değerler: ' + r.dropped.map((d) => d.field + ' = ' + d.value + ' (' + (d.reason || 'sayfada yok') + ')').join('; ') }));
+    }
+    parts.push(el('pre', { className: 'raw', textContent: JSON.stringify(r.facts, null, 2) }));
+  }
+  box.replaceChildren(...parts);
+}
+
+function renderLlm() {
+  const s = llm.status;
+  if (!s) return;
+  const running = s.job.running;
+  $('#llm-state').textContent = s.ollama.up ? 'Ollama çalışıyor' : 'Ollama kapalı (terminalde: ollama serve)';
+  $('#llm-state').className = s.ollama.up ? '' : 'err';
+  const sel = $('#llm-model');
+  if (sel.options.length !== s.ollama.models.length) {
+    if (!llm.model) llm.model = s.ollama.models.includes(s.default_model) ? s.default_model : (s.ollama.models[0] || '');
+    sel.replaceChildren(...s.ollama.models.map((m) => el('option', { value: m, textContent: m })));
+    sel.value = llm.model;
+  }
+  $('#llm-coverage').textContent = s.with_website
+    ? s.with_website + ' yerin web sitesi var, ' + s.extracted + ' tanesi işlendi.'
+    : 'Henüz web sitesi olan yer yok: telefon/web (Enterprise) çekimi bittikten sonra burası dolar. Şimdilik tek sayfa denemesini kullanabilirsin.';
+  for (const id of ['#llm-run-url', '#llm-run-places']) $(id).disabled = running || !s.ollama.up;
+  $('#llm-job').replaceChildren(s.job.total
+    ? jobRow(running ? 'İşleniyor' : 'Son iş', { done: s.job.done, total: s.job.total, running, error: null }, '')
+    : '');
+  if (running && s.job.current) $('#llm-job').append(el('p', { className: 'muted', textContent: host(s.job.current) }));
+
+  if (!llm.selected && llm.results.length) llm.selected = recKey(llm.results[0]);
+  $('#llm-empty').textContent = llm.results.length ? '' : 'Henüz çıktı yok. Yukarıdan bir sayfa dene.';
+  $('#llm-rows').replaceChildren(...llm.results.map((r) => {
+    const f = r.facts;
+    const tr = el('tr', { className: 'pickrow' + (recKey(r) === llm.selected ? ' sel' : ''), tabIndex: 0 },
+      el('td', { textContent: new Date(r.ts).toLocaleString('tr', { dateStyle: 'short', timeStyle: 'short' }) }),
+      el('td', { textContent: r.name || host(r.url) }),
+      el('td', { textContent: f ? (KIND[f.venue_type] || f.venue_type) : '' }),
+      el('td', { textContent: f ? (f.is_sports_venue ? 'evet' : 'hayır') : '' }),
+      el('td', { textContent: f ? f.phones.join(', ') : '' }),
+      el('td', { textContent: f ? (BOOKING[f.online_booking] || '') : '' }),
+      el('td', { className: (r.flags || []).length ? 'warn' : '', textContent: f ? ((r.flags || []).length ? (r.flags.length + ' uyarı') : '-') : '' }),
+      el('td', { className: 'num', textContent: r.seconds + ' sn' }),
+      el('td', { className: r.ok ? '' : 'err', textContent: r.ok ? 'tamam' + (r.dropped.length ? ' · ' + r.dropped.length + ' atıldı' : '') : r.error }));
+    const pick = () => { llm.selected = recKey(r); llm.sig = ''; renderLlm(); };
+    tr.onclick = pick;
+    tr.onkeydown = (e) => { if (e.key === 'Enter') pick(); };
+    return tr;
+  }));
+  detail(llm.results.find((r) => recKey(r) === llm.selected));
+}
+
+async function pollLlm(force) {
+  if ($('#view-llm').hidden) return;
+  try {
+    const [status, results] = await Promise.all([fetch('/api/llm/status').then((r) => r.json()), fetch('/api/llm/results').then((r) => r.json())]);
+    const sig = JSON.stringify([status, results.length, results[0] && results[0].ts]);
+    llm.status = status; llm.results = results;
+    if (force || sig !== llm.sig) { llm.sig = sig; renderLlm(); }
+  } catch (e) { $('#llm-state').textContent = 'Sunucuya ulaşılamıyor'; }
+}
+$('#llm-model').onchange = (e) => { llm.model = e.target.value; };
+$('#llm-run-url').onclick = () => {
+  const url = $('#llm-url').value.trim();
+  if (url) postJson('/api/llm/run', { mode: 'url', url, model: llm.model || undefined });
+};
+$('#llm-run-places').onclick = () => postJson('/api/llm/run', {
+  mode: 'places', limit: Number($('#llm-limit').value) || 5, model: llm.model || undefined,
+  ids: $('#llm-visible').checked ? visibleIds : undefined,
+});
+document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => showView(b.dataset.view); });
+if (LIVE) {
+  $('#tabs').hidden = false;
+  setInterval(pollLlm, 2000);
+  if (location.hash === '#llm') showView('llm');
+}
+
 fillFilters();
 $('#q').oninput = (e) => { state.q = e.target.value; state.limit = 100; render(); };
 $('#il').onchange = (e) => { state.il = e.target.value; state.ilce = ''; $('#ilce').value = ''; state.limit = 100; fillFilters(); render(); };
+$('#groupby').onchange = (e) => { state.group = e.target.value; render(); };
 $('#ilce').onchange = (e) => { state.ilce = e.target.value; state.limit = 100; render(); };
 $('#type').onchange = (e) => { state.type = e.target.value; state.limit = 100; render(); };
 $('#status').onchange = (e) => { state.status = e.target.value; state.limit = 100; render(); };

@@ -1,16 +1,23 @@
 import json
 import os
 import threading
+import time
 from http.server import ThreadingHTTPServer
 
 import httpx
 import pytest
 
+from leadgen.llm_runner import LlmRunner
 from leadgen.server import App, make_handler
 
 
 def write(path, rows):
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def fake_extract(url, model, http, place_id=None, name=None, ollama_url=None):
+    return {"ts": "2026-10-29T10:00:00+00:00", "place_id": place_id, "name": name, "url": url, "model": model,
+            "ok": True, "error": None, "chars": 5, "seconds": 0.1, "facts": {}, "dropped": []}
 
 
 @pytest.fixture
@@ -22,7 +29,8 @@ def server(tmp_path):
     os.utime(raw / "details_pro.jsonl", (0, 0))  # a fresh file would read as "a fetch is running"
     srv = ThreadingHTTPServer(("127.0.0.1", 0), lambda *a, **k: None)
     port = srv.server_address[1]
-    srv.RequestHandlerClass = make_handler(App(raw), port)
+    runner = LlmRunner(raw.parent / "llm" / "out.jsonl", "http://127.0.0.1:1", extract=fake_extract)
+    srv.RequestHandlerClass = make_handler(App(raw, llm=runner), port)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{port}", raw
     srv.shutdown()
@@ -79,3 +87,33 @@ def test_report_route_rejects_path_traversal(server):
     url, _ = server
     for bad in ("../place_ids.jsonl", "..%2Fraw%2Fplace_ids.jsonl", "report-1.html"):
         assert httpx.get(f"{url}/reports/{bad}").status_code == 404
+
+
+def test_llm_status_reports_ollama_down_and_website_coverage(server):
+    url, _ = server
+    status = httpx.get(f"{url}/api/llm/status").json()
+    assert status["ollama"] == {"up": False, "models": []}
+    assert status["with_website"] == 0 and status["job"]["running"] is False
+
+
+def test_llm_run_validates_input_and_requires_header(server):
+    url, _ = server
+    run = lambda body, **kw: httpx.post(f"{url}/api/llm/run", json=body, headers={"X-Leadgen": "1"}, **kw)  # noqa: E731
+    assert httpx.post(f"{url}/api/llm/run", json={"mode": "url", "url": "https://x.example"}).status_code == 403
+    assert run({"mode": "url", "url": "file:///etc/passwd"}).status_code == 400
+    assert run({"mode": "places", "limit": 3}).status_code == 400  # no place has a website yet
+    assert run({"mode": "nope"}).status_code == 400
+    assert run({"mode": "places", "limit": "abc"}).status_code == 400
+
+
+def test_llm_url_run_end_to_end_with_fake_extractor(server):
+    url, _ = server
+    resp = httpx.post(f"{url}/api/llm/run", json={"mode": "url", "url": "https://yildiz.example/"}, headers={"X-Leadgen": "1"})
+    assert resp.status_code == 200
+    for _ in range(200):
+        results = httpx.get(f"{url}/api/llm/results").json()
+        if results:
+            break
+        time.sleep(0.01)
+    assert results[0]["url"] == "https://yildiz.example/" and results[0]["model"] == "qwen3.5:9b"
+    assert 'id="view-llm"' in httpx.get(url).text
